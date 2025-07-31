@@ -170,4 +170,15 @@ class DocumentParser:
         """Clean up temporary files"""
         import shutil
         if os.path.exists(self.temp_dir):
-            shutil.rmtree(self.temp_dir)
+            # Delete all files and folders inside temp_dir but keep temp_dir itself
+            for filename in os.listdir(self.temp_dir):
+                file_path = os.path.join(self.temp_dir, filename)
+                try:
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                except Exception as e:
+                    # Log error but continue cleanup
+                    import logging
+                    logging.getLogger(__name__).error(f"Failed to delete {file_path}: {e}")

@@ -1,5 +1,6 @@
 import time
 import asyncio
+import os
 from typing import List, Dict
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,20 +24,16 @@ class DocumentProcessor:
     async def process_request(self, request: HackRxRequest) -> HackRxResponse:
         """Main processing pipeline"""
         start_time = time.time()
+        file_path = None
         
         try:
             # Step 1: Download and parse document (run in thread pool to avoid blocking)
             logger.info(f"Downloading document from: {request.document.url}")
             loop = asyncio.get_event_loop()
             
-            # Run blocking I/O operations in thread pool
-            file_path, doc_type = await loop.run_in_executor(
-                None, self.parser.download_file, request.document.url
-            )
-            
-            logger.info(f"Parsing {doc_type} document")
-            text = await loop.run_in_executor(
-                None, self.parser.parse_document, file_path, doc_type
+            # Run download and parse as a single atomic operation
+            file_path, doc_type, text = await loop.run_in_executor(
+                None, self._download_and_parse, request.document.url
             )
             
             if not text or len(text.strip()) < 10:
@@ -71,9 +68,6 @@ class DocumentProcessor:
                 chunks
             )
             
-            # Clean up
-            await loop.run_in_executor(None, self.parser.cleanup)
-            
             processing_time = time.time() - start_time
             
             return HackRxResponse(
@@ -81,14 +75,49 @@ class DocumentProcessor:
                 total_chunks=len(chunks),
                 answers=answers,
                 processing_time=processing_time,
-                # model_used=answers[0].model_used if answers else "none"
             )
             
         except Exception as e:
             logger.error(f"Error processing request: {e}")
+            raise
+        finally:
             # Ensure cleanup runs even on error
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self.parser.cleanup)
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self.parser.cleanup)
+            except Exception as cleanup_error:
+                logger.error(f"Error during cleanup: {cleanup_error}")
+    
+    def _download_and_parse(self, url: str) -> tuple:
+        """Atomic download and parse operation to avoid race conditions"""
+        try:
+            # Download file
+            file_path, doc_type = self.parser.download_file(url)
+            
+            # Verify file exists and has content
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"Downloaded file not found at: {file_path}")
+            
+            file_size = os.path.getsize(file_path)
+            if file_size == 0:
+                raise ValueError(f"Downloaded file is empty: {file_path}")
+            
+            logger.info(f"File downloaded successfully: {file_path} ({file_size} bytes)")
+            logger.info(f"Parsing {doc_type} document")
+            
+            # Parse document
+            text = self.parser.parse_document(file_path, doc_type)
+            
+            return file_path, doc_type, text
+            
+        except Exception as e:
+            logger.error(f"Error in download_and_parse: {e}")
+            # If file was created but parsing failed, try to clean it up
+            if 'file_path' in locals() and os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except:
+                    pass
             raise
             
     async def _process_questions(
@@ -117,7 +146,6 @@ class DocumentProcessor:
                         question=questions[i],
                         answer=f"Error processing question: {str(result)}",
                         confidence=0.0,
-                        # source_chunks=[],
                         model_used="none"
                     ))
                 else:
@@ -147,7 +175,6 @@ class DocumentProcessor:
                     question=question,
                     answer=f"Error processing question: {str(e)}",
                     confidence=0.0,
-                    # source_chunks=[],
                     model_used="none"
                 ))
         return answers
@@ -170,12 +197,10 @@ class DocumentProcessor:
         
         # Prepare context from relevant chunks
         context_parts = []
-        # source_chunks = []
         
         for chunk, score in relevant_chunks:
             if score > 0.3:  # Relevance threshold
                 context_parts.append(chunk['text'])
-                # source_chunks.append(chunk['text'][:200] + "...")  # First 200 chars
                 
         context = "\n\n".join(context_parts)
         
@@ -198,6 +223,5 @@ class DocumentProcessor:
             question=question,
             answer=answer_text,
             confidence=confidence,
-            # source_chunks=source_chunks[:3],  # Top 3 chunks
             model_used=model_used
         )
