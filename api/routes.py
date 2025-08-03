@@ -19,7 +19,7 @@ async def process_document(request: Request) -> HackRxResponse:
     
     - Accepts document URL (direct or Google Drive)
     - Processes list of questions
-    - Returns structured answers with confidence scores
+    - Returns list of answers as strings
     """
     # 🔐 API Key Authentication (non-invasive addition)
     auth_header = request.headers.get("Authorization")
@@ -36,7 +36,7 @@ async def process_document(request: Request) -> HackRxResponse:
         body = await request.json()
         request_model = HackRxRequest(**body)
 
-        logger.info(f"Received request for document: {request_model.document.url}")
+        logger.info(f"Received request for document: {request_model.documents}")  # Changed from request_model.document.url
         logger.info(f"Number of questions: {len(request_model.questions)}")
 
         if not request_model.questions:
@@ -44,7 +44,7 @@ async def process_document(request: Request) -> HackRxResponse:
 
         response = await processor.process_request(request_model)
 
-        logger.info(f"Successfully processed request in {response.processing_time:.2f}s")
+        logger.info(f"Successfully processed request")  # Removed processing_time reference
         return response
 
     except ValueError as e:

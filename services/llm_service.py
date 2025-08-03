@@ -8,6 +8,7 @@ from langchain.chains import LLMChain
 from tenacity import retry, stop_after_attempt, wait_exponential
 import logging
 from dotenv import load_dotenv
+import re
 
 # Load environment variables
 load_dotenv()
@@ -23,7 +24,7 @@ class LLMService:
     def _initialize_llms(self):
         """Initialize LLMs with fallback options"""
         # Try Google Gemini first
-        # print("Google API Key:", os.getenv("GOOGLE_API_KEY"))
+        print("Google API Key:", os.getenv("GOOGLE_API_KEY"))
         if os.getenv("GOOGLE_API_KEY"):
             try:
                 self.primary_llm = ChatGoogleGenerativeAI(
@@ -66,12 +67,31 @@ class LLMService:
             
         if self.primary_llm is None and not self.fallback_llms:
             raise ValueError("No LLM models could be initialized. Please check API keys.")
+    def _clean_answer(self, answer: str) -> str:
+        """Clean the answer by removing unwanted formatting"""
+        # Remove multiple newlines
+        answer = re.sub(r'\n\s*\n', ' ', answer)
+        # Remove single newlines
+        answer = answer.replace('\n', ' ')
+        # Remove multiple spaces
+        answer = re.sub(r'\s+', ' ', answer)
+        # Strip leading/trailing whitespace
+        answer = answer.strip()
+        return answer
             
     def _create_qa_prompt(self) -> PromptTemplate:
         """Create prompt template for Q&A"""
         template = """You are an expert assistant specializing in legal, insurance, and compliance matters. 
         Based on the following context from the document, provide a clear, accurate, and comprehensive answer to the question.
-        
+        Example Q&A Format:
+        Q: What is the waiting period for pre-existing diseases?
+        A: There is a waiting period of thirty-six (36) months of continuous coverage from the first policy inception for pre-existing diseases and their direct complications to be covered.
+
+        Q: Is maternity covered under this policy?
+        A: Yes, the policy covers maternity expenses, including childbirth and lawful medical termination of pregnancy. To be eligible, the female insured person must have been continuously covered for at least 24 months. The benefit is limited to two deliveries or terminations during the policy period.
+
+        Q: Are expenses for cataract surgery covered?
+        A: Yes, but only after a waiting period of two (2) years from the policy inception date.
         Context:
         {context}
         
@@ -82,7 +102,8 @@ class LLMService:
         - If the context doesn't contain enough information, say so clearly
         - Be precise and cite specific parts of the context when relevant
         - For legal/compliance questions, be extra careful about accuracy
-        
+        - Be precise and try to return answers in under 3-4 sentences.
+        - Start with YES/NO if applicable
         Answer:"""
         
         return PromptTemplate(
@@ -100,8 +121,9 @@ class LLMService:
             try:
                 chain = LLMChain(llm=self.primary_llm, prompt=prompt)
                 answer = chain.run(context=context, question=question)
+                cleaned_answer = self._clean_answer(answer)
                 return {
-                    "answer": answer.strip(),
+                    "answer": cleaned_answer,
                     "model_used": self.primary_llm.__class__.__name__
                 }
             except Exception as e:

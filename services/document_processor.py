@@ -10,7 +10,7 @@ from services.vector_store_service import VectorStoreService
 from services.llm_service import LLMService
 from utils.document_parser import DocumentParser
 from utils.text_chunker import TextChunker
-from models.schemas import HackRxRequest, HackRxResponse, Answer
+from models.schemas import HackRxRequest, HackRxResponse
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +28,12 @@ class DocumentProcessor:
         
         try:
             # Step 1: Download and parse document (run in thread pool to avoid blocking)
-            logger.info(f"Downloading document from: {request.document.url}")
+            logger.info(f"Downloading document from: {request.documents}")  # Changed from request.document.url
             loop = asyncio.get_event_loop()
             
             # Run download and parse as a single atomic operation
             file_path, doc_type, text = await loop.run_in_executor(
-                None, self._download_and_parse, request.document.url
+                None, self._download_and_parse, request.documents  # Changed from request.document.url
             )
             
             if not text or len(text.strip()) < 10:
@@ -70,11 +70,9 @@ class DocumentProcessor:
             
             processing_time = time.time() - start_time
             
+            # Return simplified response format
             return HackRxResponse(
-                document_url=request.document.url,
-                total_chunks=len(chunks),
-                answers=answers,
-                processing_time=processing_time,
+                answers=answers  # Just return list of answer strings
             )
             
         except Exception as e:
@@ -125,7 +123,7 @@ class DocumentProcessor:
         questions: List[str],
         vector_store: VectorStoreService,
         chunks: List[Dict]
-    ) -> List[Answer]:
+    ) -> List[str]:  # Changed return type to List[str]
         """Process multiple questions concurrently"""
         # Use asyncio.gather for concurrent async processing
         tasks = []
@@ -142,14 +140,9 @@ class DocumentProcessor:
             for i, result in enumerate(answers):
                 if isinstance(result, Exception):
                     logger.error(f"Error answering question '{questions[i]}': {result}")
-                    processed_answers.append(Answer(
-                        question=questions[i],
-                        answer=f"Error processing question: {str(result)}",
-                        confidence=0.0,
-                        model_used="none"
-                    ))
+                    processed_answers.append(f"Error processing question: {str(result)}")
                 else:
-                    processed_answers.append(result)
+                    processed_answers.append(result)  # result is now just a string
             
             return processed_answers
             
@@ -162,7 +155,7 @@ class DocumentProcessor:
         self,
         questions: List[str],
         vector_store: VectorStoreService
-    ) -> List[Answer]:
+    ) -> List[str]:  # Changed return type to List[str]
         """Fallback sequential processing"""
         answers = []
         for question in questions:
@@ -171,19 +164,14 @@ class DocumentProcessor:
                 answers.append(answer)
             except Exception as e:
                 logger.error(f"Error answering question '{question}': {e}")
-                answers.append(Answer(
-                    question=question,
-                    answer=f"Error processing question: {str(e)}",
-                    confidence=0.0,
-                    model_used="none"
-                ))
+                answers.append(f"Error processing question: {str(e)}")
         return answers
         
     async def _answer_single_question(
         self,
         question: str,
         vector_store: VectorStoreService
-    ) -> Answer:
+    ) -> str:  # Changed return type to str
         """Answer a single question using RAG"""
         loop = asyncio.get_event_loop()
         
@@ -210,18 +198,7 @@ class DocumentProcessor:
                 None, self.llm_service.answer_question, question, context
             )
             answer_text = result["answer"]
-            model_used = result["model_used"]
-            confidence = await loop.run_in_executor(
-                None, self.llm_service.calculate_confidence, answer_text, context, question
-            )
+            # We're only returning the answer text now, not the full Answer object
+            return answer_text
         else:
-            answer_text = "No relevant information found in the document to answer this question."
-            model_used = "none"
-            confidence = 0.1
-            
-        return Answer(
-            question=question,
-            answer=answer_text,
-            confidence=confidence,
-            model_used=model_used
-        )
+            return "No relevant information found in the document to answer this question."
