@@ -23,8 +23,6 @@ class LLMService:
         
     def _initialize_llms(self):
         """Initialize LLMs with fallback options"""
-        # Try Google Gemini first
-        print("Google API Key:", os.getenv("GOOGLE_API_KEY"))
         if os.getenv("GOOGLE_API_KEY"):
             try:
                 self.primary_llm = ChatGoogleGenerativeAI(
@@ -37,7 +35,6 @@ class LLMService:
             except Exception as e:
                 logger.warning(f"Failed to initialize Gemini: {e}")
                 
-        # Try Groq as fallback
         if os.getenv("GROQ_API_KEY"):
             try:
                 groq_llm = ChatGroq(
@@ -54,7 +51,6 @@ class LLMService:
             except Exception as e:
                 logger.warning(f"Failed to initialize Groq: {e}")
                 
-        # HuggingFace as final fallback (works offline)
         try:
             hf_llm = HuggingFaceHub(
                 repo_id="google/flan-t5-large",
@@ -67,21 +63,15 @@ class LLMService:
             
         if self.primary_llm is None and not self.fallback_llms:
             raise ValueError("No LLM models could be initialized. Please check API keys.")
+
     def _clean_answer(self, answer: str) -> str:
-        """Clean the answer by removing unwanted formatting"""
-        # Remove multiple newlines
         answer = re.sub(r'\n\s*\n', ' ', answer)
-        # Remove single newlines
         answer = answer.replace('\n', ' ')
-        # Remove multiple spaces
         answer = re.sub(r'\s+', ' ', answer)
-        # Strip leading/trailing whitespace
-        answer = answer.strip()
-        return answer
-            
+        return answer.strip()
+    
     def _create_qa_prompt(self) -> PromptTemplate:
-        """Create prompt template for Q&A"""
-        template = """You are an expert assistant specializing in legal, insurance, and compliance matters. 
+        template = """You are an expert assistant specializing in legal, insurance, and compliance matters.
         Based on the following context from the document, provide a clear, accurate, and comprehensive answer to the question.
         Example Q&A Format:
         Q: What is the waiting period for pre-existing diseases?
@@ -94,28 +84,57 @@ class LLMService:
         A: Yes, but only after a waiting period of two (2) years from the policy inception date.
         Context:
         {context}
-        
+
         Question: {question}
-        
+
         Instructions:
         - Answer based ONLY on the provided context
         - If the context doesn't contain enough information, say so clearly
         - Be precise and cite specific parts of the context when relevant
         - For legal/compliance questions, be extra careful about accuracy
         - Be precise and try to return answers in under 3-4 sentences.
-        - Start with YES/NO if applicable
+        - Start with Yes/No if applicable
+        - Try to cite facts, numbers and figures from the context wherever possible.
         Answer:"""
-        
         return PromptTemplate(
             input_variables=["context", "question"],
             template=template
         )
-        
+
+    def _select_relevant_chunks(self, chunks: List[Dict], question: str, max_tokens: int = 3000) -> List[str]:
+        """
+        Select the most relevant chunks for the question using simple keyword scoring.
+        Returns a list of chunk texts, up to max_tokens in total.
+        """
+        question_words = set(re.findall(r'\w+', question.lower()))
+        scored_chunks = []
+        for chunk in chunks:
+            chunk_text = chunk['text'].lower()
+            score = sum(1 for word in question_words if word in chunk_text)
+            scored_chunks.append((score, chunk['text']))
+        # Sort by score descending
+        scored_chunks.sort(reverse=True, key=lambda x: x[0])
+        # Select top chunks until max_tokens is reached
+        selected = []
+        total_tokens = 0
+        for score, text in scored_chunks:
+            chunk_tokens = len(text.split())
+            if total_tokens + chunk_tokens > max_tokens:
+                break
+            selected.append(text)
+            total_tokens += chunk_tokens
+        return selected
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def answer_question(self, question: str, context: str, model_preference: Optional[str] = None) -> Dict:
-        """Generate answer using available LLMs with fallback"""
+    def answer_question(self, question: str, chunks: List[Dict], model_preference: Optional[str] = None) -> Dict:
+        """
+        Generate answer using available LLMs with fallback.
+        Chunks: list of dicts with 'text' key (from your chunker).
+        """
         prompt = self._create_qa_prompt()
-        
+        # Select relevant chunks for the question
+        selected_chunks = self._select_relevant_chunks(chunks, question, max_tokens=3000)
+        context = "\n\n".join(selected_chunks)
         # Try primary LLM first
         if self.primary_llm:
             try:
@@ -128,7 +147,6 @@ class LLMService:
                 }
             except Exception as e:
                 logger.warning(f"Primary LLM failed: {e}")
-                
         # Try fallback LLMs
         for llm in self.fallback_llms:
             try:
@@ -141,34 +159,8 @@ class LLMService:
             except Exception as e:
                 logger.warning(f"Fallback LLM {llm.__class__.__name__} failed: {e}")
                 continue
-                
         # If all LLMs fail, return error
         return {
             "answer": "Unable to generate answer due to LLM service unavailability.",
             "model_used": "none"
         }
-        
-    def calculate_confidence(self, answer: str, context: str, question: str) -> float:
-        """Calculate confidence score for the answer"""
-        # Simple heuristic-based confidence scoring
-        confidence = 0.5  # Base confidence
-        
-        # Check if answer indicates uncertainty
-        uncertainty_phrases = [
-            "not mentioned", "doesn't contain", "no information",
-            "unclear", "cannot determine", "not specified"
-        ]
-        for phrase in uncertainty_phrases:
-            if phrase.lower() in answer.lower():
-                confidence -= 0.3
-                
-        # Check if answer is substantive
-        if len(answer.split()) > 20:
-            confidence += 0.2
-            
-        # Check if answer contains specific references
-        if any(word in answer.lower() for word in ["according to", "states that", "mentions"]):
-            confidence += 0.1
-            
-        # Ensure confidence is between 0 and 1
-        return max(0.1, min(1.0, confidence))

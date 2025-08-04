@@ -171,34 +171,21 @@ class DocumentProcessor:
         self,
         question: str,
         vector_store: VectorStoreService
-    ) -> str:  # Changed return type to str
-        """Answer a single question using RAG"""
+    ) -> str:
         loop = asyncio.get_event_loop()
-        
-        # Find relevant chunks (run in thread pool)
         query_embedding = await loop.run_in_executor(
             None, self.embedding_service.embed_query, question
         )
         relevant_chunks = await loop.run_in_executor(
             None, vector_store.search, query_embedding, 5
         )
-        
-        # Prepare context from relevant chunks
-        context_parts = []
-        
-        for chunk, score in relevant_chunks:
-            if score > 0.3:  # Relevance threshold
-                context_parts.append(chunk['text'])
-                
-        context = "\n\n".join(context_parts)
-        
-        # Generate answer (run in thread pool if LLM calls are blocking)
-        if context:
+        # Pass the list of chunk dicts to LLMService
+        selected_chunks = [chunk for chunk, score in relevant_chunks if score > 0.3]
+        if selected_chunks:
             result = await loop.run_in_executor(
-                None, self.llm_service.answer_question, question, context
+                None, self.llm_service.answer_question, question, selected_chunks
             )
             answer_text = result["answer"]
-            # We're only returning the answer text now, not the full Answer object
             return answer_text
         else:
             return "No relevant information found in the document to answer this question."

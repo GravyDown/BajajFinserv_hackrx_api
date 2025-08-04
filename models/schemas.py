@@ -11,25 +11,7 @@ class DocumentType(str, Enum):
 class HackRxRequest(BaseModel):
     documents: str = Field(..., description="Direct URL to document (PDF, DOCX, etc.)")
     questions: List[str] = Field(..., min_items=1, description="List of questions to answer from document")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "documents": "https://hackrx.blob.core.windows.net/assets/policy.pdf?sv=2023-01-03&st=2025-07-04T09%3A11%3A20Z",
-                "questions": [
-                    "What is the grace period for premium payment under the National Parivar Mediclaim Plus Policy?",
-                    "What is the waiting period for pre-existing diseases (PED) to be covered?",
-                    "Does this policy cover maternity expenses, and what are the conditions?",
-                    "What is the waiting period for cataract surgery?",
-                    "Are the medical expenses for an organ donor covered under this policy?",
-                    "What is the No Claim Discount (NCD) offered in this policy?",
-                    "Is there a benefit for preventive health check-ups?",
-                    "How does the policy define a 'Hospital'?",
-                    "What is the extent of coverage for AYUSH treatments?",
-                    "Are there any sub-limits on room rent and ICU charges for Plan A?"
-                ]
-            }
-        }
+
 
 class HackRxResponse(BaseModel):
     answers: List[str] = Field(..., description="List of answers corresponding to each question")
