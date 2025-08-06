@@ -26,7 +26,7 @@ class LLMService:
         if os.getenv("GOOGLE_API_KEY"):
             try:
                 self.primary_llm = ChatGoogleGenerativeAI(
-                    model="gemini-1.5-flash",
+                    model="gemini-2.5-pro",
                     google_api_key=os.getenv("GOOGLE_API_KEY"),
                     temperature=0.3,
                     max_output_tokens=1024
